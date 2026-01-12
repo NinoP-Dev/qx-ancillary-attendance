@@ -127,7 +127,86 @@ const App = () => {
   const exportToCSV = () => {
     const headers = ["Date", "Colleague", "Clock In"];
     const rows = logs.map(l => [l.date, l.name, l.inTime]);
-    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
+
+    // Helper to escape CSV values when necessary
+    const escapeCSV = (val) => {
+      const s = String(val ?? '');
+      if (s.includes('"') || s.includes(',') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    // Build main CSV body
+    const csvBody = [headers, ...rows].map(r => r.map(escapeCSV).join(",")).join("\n");
+
+    // Build per-colleague summary (include current colleagues and any names present in logs)
+    const nameSet = new Set([...colleagues, ...logs.map(l => l.name)]);
+    const nameList = Array.from(nameSet).sort((a, b) => a.localeCompare(b));
+    const counts = nameList.map(name => [name, logs.filter(l => l.name === name).length]);
+
+    const summaryLines = [
+      '',
+      'Summary',
+      ['Colleague', 'Clock Ins'].map(escapeCSV).join(','),
+      ...counts.map(r => r.map(escapeCSV).join(','))
+    ].join('\n');
+
+    // Build monthly totals (group by year-month)
+    const parseDateFromString = (dateStr) => {
+      if (!dateStr) return null;
+      const parsed = Date.parse(dateStr);
+      if (!isNaN(parsed)) return new Date(parsed);
+      const parts = String(dateStr).split(/[-/]/).map(p => p.trim());
+      if (parts.length === 3) {
+        let day, month, year;
+        if (parts[0].length === 4) { year = parts[0]; month = parts[1]; day = parts[2]; }
+        else if (parts[2].length === 4) { day = parts[0]; month = parts[1]; year = parts[2]; }
+        else { day = parts[0]; month = parts[1]; year = parts[2]; }
+        const y = parseInt(year, 10); const m = parseInt(month, 10) - 1; const d = parseInt(day, 10);
+        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) return new Date(y, m, d);
+      }
+      return null;
+    };
+
+    const monthMap = {};
+    logs.forEach(l => {
+      const d = parseDateFromString(l.date);
+      if (!d) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
+      monthMap[key] = (monthMap[key] || 0) + 1;
+    });
+
+    const monthKeys = Object.keys(monthMap).sort((a, b) => b.localeCompare(a)); // recent first
+    // Monthly Totals section removed; per-colleague monthly breakdown still uses monthKeys
+
+
+    // Build counts indexed by colleague and month for breakdowns
+    const countsByNameMonth = {};
+    logs.forEach(l => {
+      const d = parseDateFromString(l.date);
+      if (!d) return;
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const key = `${l.name}||${monthKey}`;
+      countsByNameMonth[key] = (countsByNameMonth[key] || 0) + 1;
+    });
+
+    const breakdownHeader = ['Colleague', 'Month', 'Clock Ins'].map(escapeCSV).join(',');
+    const breakdownLines = [
+      '',
+      'Monthly Breakdown by Colleague',
+      breakdownHeader,
+      ...nameList.flatMap(name => monthKeys.map(k => {
+        const [y, m] = k.split('-');
+        const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+        const label = date.toLocaleString(undefined, { month: 'short', year: 'numeric' });
+        const count = countsByNameMonth[`${name}||${k}`] || 0;
+        return [name, label, count].map(escapeCSV).join(',');
+      }))
+    ].join('\n');
+
+    const csvContent = [csvBody, summaryLines, breakdownLines].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
